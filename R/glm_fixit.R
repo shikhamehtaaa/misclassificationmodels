@@ -119,7 +119,6 @@ compute_observed_ll <- function(params, df, outcome_formula, outcome_family,
     return(fit)
 }
 
-
 .conv_formula <- function(formula) {
   formula_string <- paste(deparse(formula), collapse = " ")
   formula_string <- gsub("\\s+", " ", formula_string)
@@ -127,7 +126,6 @@ compute_observed_ll <- function(params, df, outcome_formula, outcome_family,
   formula_parts <- strsplit(formula_string, "\\|\\|")[[1]]
   formula_parts <- trimws(formula_parts)
   
-  # Pad to length 3: outcome | proxy | naive
   while (length(formula_parts) < 3) {
     formula_parts <- c(formula_parts, "~ 1")
   }
@@ -137,31 +135,37 @@ compute_observed_ll <- function(params, df, outcome_formula, outcome_family,
     as.formula(part)
   }
   
-  formulas <- lapply(formula_parts, fix_formula_part)
+  outcome_formula <- fix_formula_part(formula_parts[[1]])
+  naive_formula   <- fix_formula_part(formula_parts[[length(formula_parts)]])
   
-  outcome_formula <- formulas[[1]]
-  proxy_formula   <- formulas[[2]]
-  naive_formula   <- formulas[[3]]
+  # Middle parts are proxy formulas
+  proxy_parts <- formula_parts[2:(length(formula_parts) - 1)]
+  proxy_formulas <- lapply(proxy_parts, fix_formula_part)
   
-  # Grab outcome variable from outcome_formula
-  lhs <- all.vars(update(outcome_formula, . ~ 0))[1]
-  
-  # Fix naive_formula if it looks like y ~ NA or y ~ 
-  rhs_naive <- tryCatch(as.character(naive_formula)[3], error = function(e) "1")
-  if (is.na(rhs_naive) || rhs_naive == "") {
-    rhs_naive <- "1"
+  # Promote to single formula if only one proxy
+  proxy_formula_output <- if (length(proxy_formulas) == 1) {
+    proxy_formulas[[1]]
+  } else {
+    proxy_formulas
   }
+  
+  # Extract LHS for fixing naive_formula
+  lhs <- all.vars(update(outcome_formula, . ~ 0))[1]
+  rhs_naive <- tryCatch(as.character(naive_formula)[3], error = function(e) "1")
+  if (is.na(rhs_naive) || rhs_naive == "") rhs_naive <- "1"
   naive_formula <- as.formula(paste(lhs, "~", rhs_naive))
   
   named_formulas <- list(
     outcome_formula = outcome_formula,
-    proxy_formula   = proxy_formula,
+    proxy_formula   = proxy_formula_output,
     naive_formula   = naive_formula,
-    truth_formula   = proxy_formula,
-    yproxy          = !identical(deparse(proxy_formula), "~ 1")
+    truth_formula   = proxy_formula_output,
+    yproxy          = if (is.list(proxy_formula_output)) {
+      any(sapply(proxy_formula_output, function(pf) !identical(deparse(pf), "~ 1")))
+    } else {
+      !identical(deparse(proxy_formula_output), "~ 1")
+    }
   )
-  
-  stopifnot(all(sapply(named_formulas[c("outcome_formula", "proxy_formula", "naive_formula")], inherits, "formula")))
   
   return(named_formulas)
 }
@@ -269,8 +273,6 @@ glm_fixit <- function(formula, family = gaussian(), data, data2,
   naive <- glm(formula = formula(parsed_formula$naive_formula), family = family, data = data)
   feasible <- glm(formula = formula(parsed_formula$outcome_formula), family = family, data = data2)
   stopifnot(inherits(parsed_formula$naive_formula, "formula"))
-  message("Naive formula: ", deparse(parsed_formula$naive_formula))
-  message("Outcome formula: ", deparse(parsed_formula$outcome_formula))
   naive <- glm(formula = parsed_formula$naive_formula, family = family, data = data)
   feasible <- glm(formula = parsed_formula$outcome_formula, family = family, data = data2)
 
